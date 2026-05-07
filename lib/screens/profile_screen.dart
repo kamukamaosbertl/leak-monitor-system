@@ -1,7 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../theme/app_theme.dart';
 
+import '../services/api_service.dart';
+import '../theme/app_theme.dart';
+
+/// ─── PROFILE SCREEN ───────────────────────────────────────────────────────────
+/// Accessible from both role dashboards via a profile icon / drawer.
+/// Allows the user to edit phone and department.
+/// Logout and Delete account both return the user to /login with the stack
+/// fully cleared so they cannot press Back into the app.
+/// ──────────────────────────────────────────────────────────────────────────────
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
@@ -10,668 +18,401 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  final _nameController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _phoneController = TextEditingController();
+  String username = 'User';
+  String email = '';
+  String role = '';
+  String phone = '';
+  String department = '';
 
-  bool _isEditing = false;
-  bool _isLoading = true;
-  bool _pushNotifications = true;
-  bool _emailNotifications = true;
-  bool _criticalOnly = false;
+  bool notificationsEnabled = true;
+  bool isLoading = true;
+  bool isSaving = false;
 
-  int? _userId;
-  String _role = 'worker';
+  final phoneCtrl = TextEditingController();
+  final departmentCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _loadUserData();
+    _loadProfile();
   }
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _emailController.dispose();
-    _phoneController.dispose();
+    phoneCtrl.dispose();
+    departmentCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _loadUserData() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    setState(() {
-      _userId = prefs.getInt('user_id');
-      _nameController.text = prefs.getString('username') ?? 'User';
-      _emailController.text = prefs.getString('email') ?? '';
-      _phoneController.text = prefs.getString('phone') ?? '+256 700 000 000';
-      _role = prefs.getString('role') ?? 'worker';
-
-      _pushNotifications = prefs.getBool('pushNotifications') ?? true;
-      _emailNotifications = prefs.getBool('emailNotifications') ?? true;
-      _criticalOnly = prefs.getBool('criticalOnlyNotifications') ?? false;
-
-      _isLoading = false;
-    });
-  }
-
-  Future<void> _toggleEdit() async {
-    if (_isEditing) {
+  Future<void> _loadProfile() async {
+    try {
+      final user = await ApiService.me();
       final prefs = await SharedPreferences.getInstance();
 
-      await prefs.setString('username', _nameController.text.trim());
-      await prefs.setString('email', _emailController.text.trim());
-      await prefs.setString('phone', _phoneController.text.trim());
+      if (!mounted) return;
+
+      setState(() {
+        username =
+            user['username']?.toString() ?? prefs.getString('username') ?? 'User';
+        email = user['email']?.toString() ?? prefs.getString('email') ?? '';
+        role = user['role']?.toString() ?? prefs.getString('role') ?? '';
+        phone = user['phone_number']?.toString() ??
+            prefs.getString('phone_number') ??
+            '';
+        department = user['department']?.toString() ??
+            prefs.getString('department') ??
+            '';
+
+        phoneCtrl.text = phone;
+        departmentCtrl.text = department;
+        isLoading = false;
+      });
+    } catch (_) {
+      final prefs = await SharedPreferences.getInstance();
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Profile saved successfully')),
-      );
+
+      setState(() {
+        username = prefs.getString('username') ?? 'User';
+        email = prefs.getString('email') ?? '';
+        role = prefs.getString('role') ?? '';
+        phone = prefs.getString('phone_number') ?? '';
+        department = prefs.getString('department') ?? '';
+
+        phoneCtrl.text = phone;
+        departmentCtrl.text = department;
+        isLoading = false;
+      });
     }
-
-    setState(() => _isEditing = !_isEditing);
   }
 
-  Future<void> _setPushNotifications(bool value) async {
+  Future<void> _goBackHome() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('pushNotifications', value);
-
-    setState(() => _pushNotifications = value);
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          value ? 'Push notifications enabled' : 'Push notifications disabled',
-        ),
-      ),
-    );
-  }
-
-  Future<void> _setEmailNotifications(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('emailNotifications', value);
-
-    setState(() => _emailNotifications = value);
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          value
-              ? 'Email notifications enabled'
-              : 'Email notifications disabled',
-        ),
-      ),
-    );
-  }
-
-  Future<void> _setCriticalOnly(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('criticalOnlyNotifications', value);
-
-    setState(() => _criticalOnly = value);
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          value
-              ? 'Only critical notifications enabled'
-              : 'All alert notifications enabled',
-        ),
-      ),
-    );
-  }
-
-  Future<void> _signOut() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    await prefs.remove('auth_token');
-    await prefs.remove('refresh_token');
-    await prefs.remove('user_id');
-    await prefs.remove('username');
-    await prefs.remove('email');
-    await prefs.remove('phone');
-    await prefs.remove('role');
-    await prefs.remove('isLoggedIn');
+    final savedRole = role.isNotEmpty ? role : prefs.getString('role') ?? '';
 
     if (!mounted) return;
+
+    if (savedRole == 'admin') {
+      Navigator.pushReplacementNamed(context, '/dashboard');
+      return;
+    }
+
+    if (savedRole == 'technician') {
+      Navigator.pushReplacementNamed(context, '/technician-dashboard');
+      return;
+    }
+
+    Navigator.pushReplacementNamed(context, '/login');
+  }
+
+  Future<void> _saveProfile() async {
+    setState(() => isSaving = true);
+
+    try {
+      await ApiService.setupProfile(
+        role: role,
+        phoneNumber: phoneCtrl.text.trim(),
+        department: departmentCtrl.text.trim(),
+      );
+
+      await _loadProfile();
+
+      if (!mounted) return;
+
+      Navigator.pop(context);
+      _showSnack('Profile updated');
+    } catch (_) {
+      if (!mounted) return;
+      _showSnack('Could not update profile');
+    } finally {
+      if (mounted) setState(() => isSaving = false);
+    }
+  }
+
+  void _openEditSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 20,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Edit Profile',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: phoneCtrl,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(labelText: 'Phone Number'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: departmentCtrl,
+              decoration: const InputDecoration(labelText: 'Department'),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: isSaving ? null : _saveProfile,
+                child: isSaving
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text('Save Changes'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _logout() async {
+    await ApiService.logout();
+
+    if (!mounted) return;
+
     Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
   }
 
-  String get _roleTitle {
-    switch (_role.toLowerCase()) {
-      case 'admin':
-        return 'System Administrator';
-      case 'technician':
-        return 'Technician';
-      case 'viewer':
-        return 'Viewer';
-      default:
-        return 'Worker';
-    }
-  }
-
-  String get _roleDescription {
-    switch (_role.toLowerCase()) {
-      case 'admin':
-        return 'Full access to dashboard, alerts, responses, maintenance, reports, users, and settings.';
-      case 'technician':
-        return 'Can view assigned maintenance work, respond to alerts, and update repair progress.';
-      case 'viewer':
-        return 'Read-only access to dashboard and history.';
-      default:
-        return 'Can view dashboard, receive alerts, respond to incidents, and request technicians.';
-    }
-  }
-
-  IconData get _roleIcon {
-    switch (_role.toLowerCase()) {
-      case 'admin':
-        return Icons.admin_panel_settings_rounded;
-      case 'technician':
-        return Icons.engineering_rounded;
-      case 'viewer':
-        return Icons.visibility_rounded;
-      default:
-        return Icons.badge_rounded;
-    }
-  }
-
-  List<String> get _permissions {
-    switch (_role.toLowerCase()) {
-      case 'admin':
-        return [
-          'View dashboard',
-          'Manage alerts',
-          'View alert responses',
-          'Track maintenance requests',
-          'View reports',
-          'Manage users and settings',
-        ];
-      case 'technician':
-        return [
-          'View alerts',
-          'Respond to incidents',
-          'Update maintenance status',
-          'Mark repairs complete',
-        ];
-      case 'viewer':
-        return ['View dashboard', 'View leak history', 'Read-only access'];
-      default:
-        return [
-          'View dashboard',
-          'Receive notifications',
-          'Acknowledge alerts',
-          'Respond to incidents',
-          'Request technician support',
-        ];
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          onPressed: () {
-            Navigator.pushReplacementNamed(context, '/dashboard');
-          },
+  Future<void> _deleteAccount() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete account?'),
+        content: const Text(
+          'This action cannot be undone. Your account will be removed.',
         ),
-        title: const Text('My Profile'),
         actions: [
           TextButton(
-            onPressed: _toggleEdit,
-            child: Text(
-              _isEditing ? 'Save' : 'Edit',
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            _buildAvatarSection(),
-            const SizedBox(height: 16),
-            _buildInfoSection(),
-            const SizedBox(height: 16),
-            _buildNotificationsSection(),
-            const SizedBox(height: 16),
-            _buildRoleSection(),
-            const SizedBox(height: 16),
-            _buildAccountSection(),
-            const SizedBox(height: 32),
-          ],
-        ),
-      ),
     );
+
+    if (confirm != true) return;
+
+    try {
+      await ApiService.deleteAccount();
+
+      if (!mounted) return;
+
+      Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+    } catch (_) {
+      if (!mounted) return;
+      _showSnack('Could not delete account');
+    }
   }
 
-  Widget _buildAvatarSection() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
-      color: AppColors.primary,
-      child: Column(
-        children: [
-          Stack(
-            children: [
-              const CircleAvatar(
-                radius: 48,
-                backgroundColor: Colors.white30,
-                child: Icon(Icons.person, size: 52, color: Colors.white),
-              ),
-              if (_isEditing)
-                Positioned(
-                  bottom: 0,
-                  right: 0,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: const BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.camera_alt,
-                      size: 16,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            _nameController.text.isEmpty ? 'User' : _nameController.text,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-            decoration: BoxDecoration(
-              color: Colors.white24,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              _roleTitle,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          if (_userId != null) ...[
-            const SizedBox(height: 6),
-            Text(
-              'User ID: $_userId',
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
-            ),
-          ],
-        ],
-      ),
-    );
+  void _showSnack(String msg) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  Widget _buildInfoSection() {
-    return _SectionCard(
-      title: 'Account Information',
-      children: [
-        _ProfileField(
-          label: 'Full Name',
-          controller: _nameController,
-          icon: Icons.person_outline,
-          enabled: _isEditing,
-        ),
-        const Divider(height: 1),
-        _ProfileField(
-          label: 'Email Address',
-          controller: _emailController,
-          icon: Icons.email_outlined,
-          enabled: _isEditing,
-          keyboardType: TextInputType.emailAddress,
-        ),
-        const Divider(height: 1),
-        _ProfileField(
-          label: 'Phone Number',
-          controller: _phoneController,
-          icon: Icons.phone_outlined,
-          enabled: _isEditing,
-          keyboardType: TextInputType.phone,
-        ),
-      ],
-    );
+  String get _roleLabel {
+    if (role == 'admin') return 'Admin';
+    if (role == 'technician') return 'Technician';
+    return 'User';
   }
-
-  Widget _buildNotificationsSection() {
-    return _SectionCard(
-      title: 'Notification Preferences',
-      children: [
-        SwitchListTile(
-          value: _pushNotifications,
-          title: const Text('Push Notifications'),
-          subtitle: const Text('Receive leak alerts on this device'),
-          secondary: const Icon(Icons.notifications_outlined),
-          onChanged: _setPushNotifications,
-        ),
-        const Divider(height: 1),
-        SwitchListTile(
-          value: _criticalOnly,
-          title: const Text('Critical Alerts Only'),
-          subtitle: const Text('Only notify me when leaks are critical'),
-          secondary: const Icon(Icons.priority_high_rounded),
-          onChanged: _pushNotifications ? _setCriticalOnly : null,
-        ),
-        const Divider(height: 1),
-        SwitchListTile(
-          value: _emailNotifications,
-          title: const Text('Email Notifications'),
-          subtitle: const Text('Receive reports and summaries by email'),
-          secondary: const Icon(Icons.email_outlined),
-          onChanged: _setEmailNotifications,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildRoleSection() {
-    return _SectionCard(
-      title: 'Role & Permissions',
-      children: [
-        ListTile(
-          leading: Icon(_roleIcon, color: AppColors.primary),
-          title: Text(_roleTitle),
-          subtitle: Text(_roleDescription),
-          trailing: const Icon(
-            Icons.lock_outline,
-            size: 16,
-            color: AppColors.textSecondary,
-          ),
-        ),
-        const Divider(height: 1),
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children:
-                _permissions
-                    .map(
-                      (permission) => Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.check_circle_rounded,
-                              size: 18,
-                              color: AppColors.accentGreen,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                permission,
-                                style: const TextStyle(
-                                  color: AppColors.textPrimary,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
-                    .toList(),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildAccountSection() {
-    return _SectionCard(
-      title: 'Account',
-      children: [
-        ListTile(
-          leading: const Icon(
-            Icons.lock_reset_outlined,
-            color: AppColors.statusAlert,
-          ),
-          title: const Text(
-            'Change Password',
-            style: TextStyle(color: AppColors.statusAlert),
-          ),
-          subtitle: const Text('Update your account password'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: _showChangePasswordDialog,
-        ),
-        const Divider(height: 1),
-        ListTile(
-          leading: const Icon(
-            Icons.logout_rounded,
-            color: AppColors.statusAlert,
-          ),
-          title: const Text(
-            'Sign Out',
-            style: TextStyle(color: AppColors.statusAlert),
-          ),
-          subtitle: const Text('Logout from this device'),
-          onTap: _showSignOutDialog,
-        ),
-      ],
-    );
-  }
-
-  void _showChangePasswordDialog() {
-    final currentController = TextEditingController();
-    final newController = TextEditingController();
-    final confirmController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: const Text('Change Password'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: currentController,
-                decoration: const InputDecoration(
-                  labelText: 'Current Password',
-                ),
-                obscureText: true,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: newController,
-                decoration: const InputDecoration(labelText: 'New Password'),
-                obscureText: true,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: confirmController,
-                decoration: const InputDecoration(
-                  labelText: 'Confirm New Password',
-                ),
-                obscureText: true,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final current = currentController.text.trim();
-                final password = newController.text.trim();
-                final confirm = confirmController.text.trim();
-
-                if (current.isEmpty || password.isEmpty || confirm.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Fill in all password fields'),
-                    ),
-                  );
-                  return;
-                }
-
-                if (password.length < 6) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Password must be at least 6 characters'),
-                    ),
-                  );
-                  return;
-                }
-
-                if (password != confirm) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Passwords do not match')),
-                  );
-                  return;
-                }
-
-                Navigator.pop(ctx);
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'Password validation passed. Connect backend endpoint next.',
-                    ),
-                  ),
-                );
-              },
-              child: const Text('Update'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _showSignOutDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: const Text('Sign Out'),
-          content: const Text('Are you sure you want to sign out?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.statusAlert,
-              ),
-              onPressed: () {
-                Navigator.pop(ctx);
-                _signOut();
-              },
-              child: const Text('Sign Out'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _SectionCard extends StatelessWidget {
-  final String title;
-  final List<Widget> children;
-
-  const _SectionCard({required this.title, required this.children});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 4, bottom: 8),
-            child: Text(
-              title.toUpperCase(),
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-                color: AppColors.textSecondary,
-                letterSpacing: 1.0,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _goBackHome();
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.background,
+        appBar: AppBar(
+          title: const Text('Profile'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: _goBackHome,
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.edit_rounded),
+              onPressed: isLoading ? null : _openEditSheet,
+            ),
+          ],
+        ),
+        body: isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        children: [
+                          const CircleAvatar(
+                            radius: 46,
+                            backgroundColor: AppColors.primary,
+                            child: Icon(
+                              Icons.person_rounded,
+                              size: 44,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            username,
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _roleLabel,
+                            style: const TextStyle(
+                              color: AppColors.textSecondary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Card(
+                    child: Column(
+                      children: [
+                        _InfoTile(
+                          icon: Icons.email_outlined,
+                          title: 'Email',
+                          value: email.isEmpty ? 'Not provided' : email,
+                        ),
+                        _InfoTile(
+                          icon: Icons.phone_outlined,
+                          title: 'Phone',
+                          value: phone.isEmpty ? 'Not provided' : phone,
+                        ),
+                        _InfoTile(
+                          icon: Icons.work_outline_rounded,
+                          title: 'Department',
+                          value: department.isEmpty
+                              ? 'Not provided'
+                              : department,
+                        ),
+                        _InfoTile(
+                          icon: Icons.badge_outlined,
+                          title: 'Role',
+                          value: _roleLabel,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Card(
+                    child: Column(
+                      children: [
+                        SwitchListTile(
+                          secondary: const Icon(Icons.notifications_outlined),
+                          title: const Text('Notifications'),
+                          subtitle: Text(
+                            notificationsEnabled ? 'Enabled' : 'Disabled',
+                          ),
+                          value: notificationsEnabled,
+                          onChanged: (v) {
+                            setState(() => notificationsEnabled = v);
+                            _showSnack(
+                              v
+                                  ? 'Notifications enabled'
+                                  : 'Notifications disabled',
+                            );
+                          },
+                        ),
+                        const Divider(height: 1),
+                        const ListTile(
+                          leading: Icon(Icons.privacy_tip_outlined),
+                          title: Text('Privacy Policy'),
+                          trailing: Icon(Icons.chevron_right),
+                        ),
+                        const Divider(height: 1),
+                        const ListTile(
+                          leading: Icon(Icons.description_outlined),
+                          title: Text('Terms & Conditions'),
+                          trailing: Icon(Icons.chevron_right),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Card(
+                    child: Column(
+                      children: [
+                        ListTile(
+                          leading: const Icon(Icons.logout_rounded),
+                          title: const Text('Logout'),
+                          onTap: _logout,
+                        ),
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: const Icon(
+                            Icons.delete_outline_rounded,
+                            color: AppColors.statusAlert,
+                          ),
+                          title: const Text(
+                            'Delete my account',
+                            style: TextStyle(color: AppColors.statusAlert),
+                          ),
+                          onTap: _deleteAccount,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.border),
-              boxShadow: const [
-                BoxShadow(
-                  blurRadius: 6,
-                  color: Color(0x0D000000),
-                  offset: Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Column(children: children),
-          ),
-        ],
       ),
     );
   }
 }
 
-class _ProfileField extends StatelessWidget {
-  final String label;
-  final TextEditingController controller;
+class _InfoTile extends StatelessWidget {
   final IconData icon;
-  final bool enabled;
-  final TextInputType keyboardType;
+  final String title;
+  final String value;
 
-  const _ProfileField({
-    required this.label,
-    required this.controller,
+  const _InfoTile({
     required this.icon,
-    required this.enabled,
-    this.keyboardType = TextInputType.text,
+    required this.title,
+    required this.value,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: TextField(
-        controller: controller,
-        enabled: enabled,
-        keyboardType: keyboardType,
-        decoration: InputDecoration(
-          labelText: label,
-          prefixIcon: Icon(icon),
-          border: InputBorder.none,
-          enabledBorder: InputBorder.none,
-          focusedBorder: InputBorder.none,
-          disabledBorder: InputBorder.none,
-          filled: false,
-        ),
-      ),
+    return ListTile(
+      leading: Icon(icon, color: AppColors.primary),
+      title: Text(title),
+      subtitle: Text(value),
     );
   }
 }

@@ -71,15 +71,15 @@ abstract final class AppTheme {
         ),
       ),
 
-      cardTheme: CardTheme(
-        color: AppColors.surface,
-        elevation: 0,
-        margin: EdgeInsets.zero,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: AppColors.border),
-        ),
-      ),
+     cardTheme: CardThemeData(
+  color: AppColors.surface,
+  elevation: 0,
+  margin: EdgeInsets.zero,
+  shape: RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(16),
+    side: const BorderSide(color: AppColors.border),
+  ),
+),
 
       drawerTheme: const DrawerThemeData(backgroundColor: Colors.white),
 

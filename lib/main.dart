@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
@@ -6,25 +8,26 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'firebase_options.dart';
-
 import 'providers/settings_provider.dart';
 import 'services/notification_service.dart';
 import 'theme/app_theme.dart';
 
+// Auth & onboarding
 import 'screens/splash_screen.dart';
-import 'screens/home_screen.dart';
-import 'screens/dashboard_screen.dart';
-import 'screens/history_screen.dart';
-import 'screens/alerts_screen.dart';
-import 'screens/profile_screen.dart';
-import 'screens/settings_screen.dart';
-import 'screens/help_support_screen.dart';
-import 'screens/zone_map_screen.dart';
-
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/signup_screen.dart';
-import 'screens/auth/forgot_password_screen.dart';
+import 'screens/auth/profile_setup_screen.dart';
+import 'screens/welcome_screen.dart';
+import 'screens/profile_screen.dart';
 
+// Shared
+import 'screens/alerts_screen.dart';
+import 'screens/help_support_screen.dart';
+
+// Admin
+import 'screens/dashboard_screen.dart';
+import 'screens/history_screen.dart';
+import 'screens/zone_map_screen.dart';
 import 'screens/admin/admin_home_screen.dart';
 import 'screens/admin/users_screen.dart';
 import 'screens/admin/system_settings_screen.dart';
@@ -32,22 +35,24 @@ import 'screens/admin/alert_responses_screen.dart';
 import 'screens/admin/maintenance_requests_screen.dart';
 import 'screens/admin/reports_screen.dart';
 
+// ─── Background message handler ───────────────────────────────────────────────
+// Must be a top-level function — Firebase requirement.
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  debugPrint('Background message received: ${message.messageId}');
-  debugPrint('Background title: ${message.notification?.title}');
-  debugPrint('Background body: ${message.notification?.body}');
+  debugPrint('BG message: ${message.messageId}');
 }
 
+// ─── Entry point ──────────────────────────────────────────────────────────────
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Lock to portrait.
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
 
+  // Transparent status bar with dark icons.
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -55,55 +60,7 @@ Future<void> main() async {
     ),
   );
 
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  await NotificationService.init();
-
-  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-
-  final messaging = FirebaseMessaging.instance;
-
-  final notificationSettings = await messaging.requestPermission(
-    alert: true,
-    badge: true,
-    sound: true,
-    provisional: false,
-  );
-
-  debugPrint(
-    'Notification permission status: ${notificationSettings.authorizationStatus}',
-  );
-
-  final fcmToken = await messaging.getToken();
-  debugPrint('FCM Token: $fcmToken');
-
-  if (fcmToken != null) {
-    await NotificationService.sendTokenToBackend(fcmToken);
-  }
-
-  messaging.onTokenRefresh.listen((newToken) async {
-    debugPrint('Refreshed FCM Token: $newToken');
-    await NotificationService.sendTokenToBackend(newToken);
-  });
-
-  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-    debugPrint('Foreground message received: ${message.messageId}');
-    debugPrint('Foreground title: ${message.notification?.title}');
-    debugPrint('Foreground body: ${message.notification?.body}');
-    NotificationService.showLocalNotification(message);
-  });
-
-  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    debugPrint('Notification opened app: ${message.messageId}');
-  });
-
-  final initialMessage = await messaging.getInitialMessage();
-
-  if (initialMessage != null) {
-    debugPrint('App opened from terminated state via notification.');
-    debugPrint('Initial message ID: ${initialMessage.messageId}');
-  }
-
+  // Load persisted settings before the first frame.
   final settings = await SettingsProvider.init();
 
   runApp(
@@ -112,95 +69,168 @@ Future<void> main() async {
       child: const MyApp(),
     ),
   );
+
+  // Set up Firebase + push notifications after the first frame so the app
+  // paints immediately and the user is not blocked by permission dialogs.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(_setupNotifications());
+  });
 }
 
-class RoleGuard extends StatelessWidget {
+// ─── Notification setup ───────────────────────────────────────────────────────
+Future<void> _setupNotifications() async {
+  try {
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+    await NotificationService.init();
+
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+    final messaging  = FirebaseMessaging.instance;
+    final permission = await messaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+    debugPrint('Notification permission: ${permission.authorizationStatus}');
+
+    final token = await messaging.getToken();
+    if (token != null && token.isNotEmpty) {
+      await NotificationService.sendTokenToBackend(token);
+    }
+
+    // Keep the backend token fresh if FCM rotates it.
+    messaging.onTokenRefresh.listen(NotificationService.sendTokenToBackend);
+
+    // Show a local notification while the app is in the foreground.
+    FirebaseMessaging.onMessage.listen(NotificationService.showLocalNotification);
+
+    // Handle tap when the app was in the background.
+    FirebaseMessaging.onMessageOpenedApp.listen((msg) {
+      debugPrint('Notification opened app: ${msg.messageId}');
+    });
+  } catch (e) {
+    debugPrint('Notification setup failed: $e');
+  }
+}
+
+// ─── AuthGuard ────────────────────────────────────────────────────────────────
+// Wraps any route that requires a stored token.
+// If no token is found the user is shown the LoginScreen instead.
+//
+// NOTE: This only checks the LOCAL token (fast, no network).
+// The SplashScreen does the full backend verification once on app start.
+class AuthGuard extends StatefulWidget {
+  final Widget child;
+  const AuthGuard({super.key, required this.child});
+
+  @override
+  State<AuthGuard> createState() => _AuthGuardState();
+}
+
+class _AuthGuardState extends State<AuthGuard> {
+  late final Future<bool> _check = _hasToken();
+
+  Future<bool> _hasToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('auth_token') ?? '';
+    return token.isNotEmpty;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<bool>(
+      future: _check,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        }
+        return snapshot.data! ? widget.child : const LoginScreen();
+      },
+    );
+  }
+}
+
+// ─── RoleGuard ────────────────────────────────────────────────────────────────
+// Wraps any route that requires a specific role.
+// If the stored role is not in [allowedRoles] the user sees UnauthorizedScreen.
+// This is what stops a technician ever reaching an admin route.
+class RoleGuard extends StatefulWidget {
   final Widget child;
   final List<String> allowedRoles;
 
-  const RoleGuard({super.key, required this.child, required this.allowedRoles});
+  const RoleGuard({
+    super.key,
+    required this.child,
+    required this.allowedRoles,
+  });
+
+  @override
+  State<RoleGuard> createState() => _RoleGuardState();
+}
+
+class _RoleGuardState extends State<RoleGuard> {
+  late final Future<bool> _check = _isAllowed();
 
   Future<bool> _isAllowed() async {
     final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('auth_token') ?? '';
+    final role  = prefs.getString('role') ?? '';
 
-    final token = prefs.getString('auth_token');
-    final role = prefs.getString('role') ?? 'worker';
-
-    if (token == null || token.isEmpty) {
-      return false;
-    }
-
-    return allowedRoles.contains(role);
+    if (token.isEmpty || role.isEmpty) return false;
+    return widget.allowedRoles.contains(role);
   }
 
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<bool>(
-      future: _isAllowed(),
+      future: _check,
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
+        if (snapshot.data!) return widget.child;
 
-        if (snapshot.data == true) {
-          return child;
-        }
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          final prefs = await SharedPreferences.getInstance();
+          final role = prefs.getString('role') ?? '';
 
-        return const UnauthorizedScreen();
+          if (!context.mounted) return;
+
+          if (role == 'admin') {
+            Navigator.pushNamedAndRemoveUntil(context, '/admin', (_) => false);
+          } else if (role == 'technician') {
+            Navigator.pushNamedAndRemoveUntil(context, '/technician-dashboard', (_) => false);
+          } else {
+            Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+          }
+        });
+
+        return const Scaffold(
+          body: Center(child: CircularProgressIndicator()),
+        );
       },
     );
   }
 }
 
-class AuthGuard extends StatelessWidget {
-  final Widget child;
-
-  const AuthGuard({super.key, required this.child});
-
-  Future<bool> _isLoggedIn() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('auth_token');
-    return token != null && token.isNotEmpty;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<bool>(
-      future: _isLoggedIn(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
-
-        if (snapshot.data == true) {
-          return child;
-        }
-
-        return const LoginScreen();
-      },
-    );
-  }
-}
-
+// ─── UnauthorizedScreen ───────────────────────────────────────────────────────
+// Shown when a user tries to access a route their role does not allow.
+// "Go Home" sends them back to their own dashboard.
 class UnauthorizedScreen extends StatelessWidget {
   const UnauthorizedScreen({super.key});
 
   Future<void> _goHome(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
-    final role = prefs.getString('role') ?? 'worker';
+    final role  = prefs.getString('role') ?? '';
 
     if (!context.mounted) return;
 
     if (role == 'admin') {
-      Navigator.pushReplacementNamed(context, '/admin');
+      Navigator.pushNamedAndRemoveUntil(context, '/admin', (_) => false);
     } else if (role == 'technician') {
-      Navigator.pushReplacementNamed(context, '/admin/maintenance');
+      Navigator.pushNamedAndRemoveUntil(context, '/technician-dashboard', (_) => false);
     } else {
-      Navigator.pushReplacementNamed(context, '/dashboard');
+      Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
     }
   }
 
@@ -208,11 +238,7 @@ class UnauthorizedScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('Access Denied'),
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-      ),
+      appBar: AppBar(title: const Text('Access Denied')),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -226,7 +252,7 @@ class UnauthorizedScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               const Text(
-                'You do not have permission to view this page.',
+                'You do not have permission\nto view this page.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 18,
@@ -244,7 +270,7 @@ class UnauthorizedScreen extends StatelessWidget {
               ElevatedButton.icon(
                 onPressed: () => _goHome(context),
                 icon: const Icon(Icons.arrow_back_rounded),
-                label: const Text('Go Back'),
+                label: const Text('Go Home'),
               ),
             ],
           ),
@@ -254,14 +280,15 @@ class UnauthorizedScreen extends StatelessWidget {
   }
 }
 
+// ─── MyApp ────────────────────────────────────────────────────────────────────
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  Widget _auth(Widget child) => AuthGuard(child: child);
-
-  Widget _roles(List<String> roles, Widget child) {
-    return RoleGuard(allowedRoles: roles, child: child);
-  }
+  // Shorthand helpers that keep the route table readable.
+  Widget _auth(Widget child)               => AuthGuard(child: child);
+  Widget _admin(Widget child)              => RoleGuard(allowedRoles: const ['admin'], child: child);
+  Widget _technician(Widget child)         => RoleGuard(allowedRoles: const ['technician'], child: child);
+  Widget _adminOrTech(Widget child)        => RoleGuard(allowedRoles: const ['admin', 'technician'], child: child);
 
   @override
   Widget build(BuildContext context) {
@@ -270,50 +297,44 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       initialRoute: '/splash',
+
+      // ── Route table ──────────────────────────────────────────────────────
+      //
+      //  PUBLIC        → no guard        (anyone can land here)
+      //  ONBOARDING    → _auth()         (token exists, role not confirmed yet)
+      //  ADMIN ONLY    → _admin()        (role must be 'admin')
+      //  TECH ONLY     → _technician()   (role must be 'technician')
+      //  BOTH ROLES    → _adminOrTech()  (either role is fine)
+      //
+      // ─────────────────────────────────────────────────────────────────────
       routes: {
-        // Public routes
-        '/splash': (_) => const SplashScreen(),
-        '/login': (_) => const LoginScreen(),
-        '/signup': (_) => const SignupScreen(),
-        '/forgot-password': (_) => const ForgotPasswordScreen(),
+        // Public
+        '/splash':        (_) => const SplashScreen(),
+        '/login':         (_) => const LoginScreen(),
+        '/signup':        (_) => const SignupScreen(),
 
-        // General protected routes
-        '/home': (_) => _auth(const HomeScreen()),
-        '/dashboard':
-            (_) => _roles([
-              'admin',
-              'worker',
-              'viewer',
-              'technician',
-            ], const DashboardScreen()),
-        '/profile': (_) => _auth(const ProfileScreen()),
-        '/support': (_) => _auth(const HelpSupportScreen()),
+        // Onboarding (token present but role may not be assigned yet)
+        '/profile-setup': (_) => _auth(const ProfileSetupScreen()),
+        '/welcome':       (_) => _auth(const WelcomeScreen()),
 
-        // Worker/admin/viewer routes
-        '/history':
-            (_) => _roles(['admin', 'worker', 'viewer'], const HistoryScreen()),
+        // Both roles
+        '/profile':       (_) => _adminOrTech(const ProfileScreen()),
+        '/support':       (_) => _adminOrTech(const HelpSupportScreen()),
+        '/alerts':        (_) => _adminOrTech(const AlertsScreen()),
 
-        // Alert routes
-        '/alerts':
-            (_) =>
-                _roles(['admin', 'worker', 'technician'], const AlertsScreen()),
+        // Admin only
+        '/admin':             (_) => _admin(const AdminHomeScreen()),
+        '/admin/users':       (_) => _admin(const UsersScreen()),
+        '/admin/system':      (_) => _admin(const SettingsScreen()),
+        '/admin/responses':   (_) => _admin(const AlertResponsesScreen()),
+        '/admin/maintenance': (_) => _admin(const MaintenanceRequestsScreen()),
+        '/admin/reports':     (_) => _admin(const ReportsScreen()),
+        '/dashboard':         (_) => _admin(const DashboardScreen()),
+        '/history':           (_) => _admin(const HistoryScreen()),
+        '/map':               (_) => _admin(const ZoneMapScreen()),
 
-        // Admin-only routes
-        '/admin': (_) => _roles(['admin'], const AdminHomeScreen()),
-        '/admin/users': (_) => _roles(['admin'], const UsersScreen()),
-        '/admin/system': (_) => _roles(['admin'], const SystemSettingsScreen()),
-        '/admin/responses':
-            (_) => _roles(['admin'], const AlertResponsesScreen()),
-        '/admin/reports': (_) => _roles(['admin'], const ReportsScreen()),
-        '/settings': (_) => _roles(['admin'], const SettingsScreen()),
-        '/map': (_) => _roles(['admin'], const ZoneMapScreen()),
-
-        // Admin + technician
-        '/admin/maintenance':
-            (_) => _roles([
-              'admin',
-              'technician',
-            ], const MaintenanceRequestsScreen()),
+        // Technician only
+        '/technician-dashboard': (_) => _technician(const MaintenanceRequestsScreen()),
       },
     );
   }

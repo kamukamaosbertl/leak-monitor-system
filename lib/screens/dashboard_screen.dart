@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/leak_data.dart';
 import '../../providers/settings_provider.dart';
@@ -28,11 +27,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _isConnected = false;
   bool _alertsSilenced = false;
   bool _isGeneratingReport = false;
-  bool _isCallingTechnician = false;
   int _currentNavIndex = 0;
 
-  String _userRole = 'worker';
-  int? _userId;
+  // Backend roles are only admin and technician.
+  String _userRole = 'technician';
 
   String? _lastAlertKey;
   DateTime? _lastAlertTime;
@@ -41,14 +39,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   bool get _isAdmin => _userRole == 'admin';
   bool get _isTechnician => _userRole == 'technician';
-  bool get _isWorker => _userRole == 'worker';
-  bool get _isViewer => _userRole == 'viewer';
 
-  bool get _canViewHistory => _isAdmin || _isWorker || _isViewer;
-  bool get _canViewAlerts => _isAdmin || _isWorker || _isTechnician;
-  bool get _canCallTechnician => _isAdmin || _isWorker;
-  bool get _canGenerateReport => _isAdmin || _isWorker;
+  bool get _canViewHistory => _isAdmin || _isTechnician;
+  bool get _canViewAlerts => _isAdmin || _isTechnician;
+  bool get _canGenerateReport => _isAdmin;
   bool get _canAccessSettings => _isAdmin;
+
+  // Backend still sends duration_minutes.
+  // UI displays it as seconds.
+  int get _durationSeconds => (_data.durationMinutes * 60).round();
 
   @override
   void initState() {
@@ -77,8 +76,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (!mounted) return;
 
     setState(() {
-      _userRole = prefs.getString('role') ?? 'worker';
-      _userId = prefs.getInt('user_id');
+      _userRole = prefs.getString('role') ?? 'technician';
     });
   }
 
@@ -113,7 +111,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _handleRefresh() async {
-    await Future.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
     _showSnack('Dashboard refreshed');
   }
@@ -121,33 +118,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _checkAlerts(LeakData data) {
     if (!mounted || _alertsSilenced || _settingsProvider == null) return;
 
-    final s = _settingsProvider!;
+    final settings = _settingsProvider!;
 
-    String? alertKey;
     String? alertMessage;
 
-    if (data.status == LeakStatus.critical && s.shouldAlert('critical')) {
-      alertKey =
-          'critical-${data.deviceId}-${data.lastUpdated.toIso8601String()}';
+    if (data.status == LeakStatus.critical &&
+        settings.shouldAlert('critical')) {
       alertMessage = 'Critical leak detected at ${data.location}';
-    } else if (data.delta > s.deltaThreshold && s.shouldAlert('leak')) {
-      alertKey = 'delta-${data.deviceId}-${data.lastUpdated.toIso8601String()}';
-      alertMessage =
-          'Flow delta ${data.delta.toStringAsFixed(2)} exceeded threshold ${s.deltaThreshold.toStringAsFixed(1)}';
-    } else if (data.waterLost > s.waterLostThreshold && s.shouldAlert('leak')) {
-      alertKey = 'water-${data.deviceId}-${data.lastUpdated.toIso8601String()}';
-      alertMessage =
-          'Water loss ${s.formatVolume(data.waterLost)} exceeded threshold';
-    } else if (data.durationMinutes > s.durationThreshold &&
-        s.shouldAlert('warning')) {
-      alertKey =
-          'duration-${data.deviceId}-${data.lastUpdated.toIso8601String()}';
-      alertMessage =
-          'Leak duration ${data.durationMinutes} min exceeded limit ${s.durationThreshold} min';
+    } else if (data.status == LeakStatus.warning ||
+        data.status == LeakStatus.leakDetected) {
+      if (settings.shouldAlert('leak_detected')) {
+        alertMessage = 'Leak detected at ${data.location}';
+      }
     }
 
-    if (alertKey == null || alertMessage == null) return;
+    if (alertMessage == null) return;
 
+    final alertKey =
+        '${data.status.name}-${data.deviceId}-${data.lastUpdated.toIso8601String()}';
     final now = DateTime.now();
 
     if (_lastAlertKey == alertKey &&
@@ -171,7 +159,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _generateReport() async {
     if (!_canGenerateReport) {
-      _showSnack('You do not have permission to generate reports');
+      _showSnack('Only admins can generate reports');
       return;
     }
 
@@ -186,7 +174,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       setState(() => _isGeneratingReport = false);
       _showReportDialog(report);
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() => _isGeneratingReport = false);
       _showSnack('Failed to generate report');
@@ -196,6 +184,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _showReportDialog(Map<String, dynamic> report) {
     final incident = report['incident'] as Map<String, dynamic>? ?? {};
     final generatedAt = report['generated_at']?.toString() ?? 'Unknown';
+
+    final durationMinutes =
+        (incident['duration_minutes'] as num?)?.toDouble() ?? 0;
+    final durationSeconds = (durationMinutes * 60).round();
 
     showDialog(
       context: context,
@@ -233,7 +225,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 _ReportRow(
                   label: 'Duration',
-                  value: '${incident['duration_minutes'] ?? '-'} min',
+                  value: '$durationSeconds sec',
                 ),
                 _ReportRow(
                   label: 'Water Lost',
@@ -241,7 +233,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 _ReportRow(
                   label: 'Estimated Cost',
-                  value: '${incident['money_lost'] ?? '-'}',
+                  value: 'UGX ${incident['money_lost'] ?? '-'}',
                 ),
               ],
             ),
@@ -262,61 +254,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _showSnack(_alertsSilenced ? 'Alerts silenced' : 'Alerts enabled');
   }
 
-  Future<void> _callMaintenance() async {
-    if (!_canCallTechnician) {
-      _showSnack('You do not have permission to call a technician');
-      return;
-    }
-
-    if (_isCallingTechnician) return;
-
-    setState(() => _isCallingTechnician = true);
-
-    try {
-      String severity;
-
-      switch (_data.status) {
-        case LeakStatus.critical:
-          severity = 'critical';
-          break;
-        case LeakStatus.warning:
-          severity = 'warning';
-          break;
-        default:
-          severity = 'info';
-      }
-
-      await ApiService.callTechnician(
-        deviceId: _data.deviceId,
-        location: _data.location,
-        userId: _userId ?? 1,
-        reason:
-            _data.status == LeakStatus.critical
-                ? 'Critical leak detected'
-                : 'Technician requested from dashboard',
-        severity: severity,
-      );
-
-      final Uri phoneUri = Uri(scheme: 'tel', path: '+256793702186');
-
-      if (await canLaunchUrl(phoneUri)) {
-        await launchUrl(phoneUri);
-      } else {
-        _showSnack('Could not open phone dialer');
-      }
-
-      if (!mounted) return;
-
-      setState(() => _isCallingTechnician = false);
-      _showSnack('Technician request created successfully');
-    } catch (e) {
-      if (!mounted) return;
-
-      setState(() => _isCallingTechnician = false);
-      _showSnack('Failed to request technician');
-    }
-  }
-
   void _navigateToRoute(String route) {
     Navigator.of(context).pushReplacementNamed(route);
   }
@@ -331,7 +268,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final items = _bottomDestinations();
 
     if (index < 0 || index >= items.length) return;
-
     if (index == _currentNavIndex) return;
 
     setState(() => _currentNavIndex = index);
@@ -441,6 +377,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return (number: formatted, unit: '');
   }
 
+  bool get _isLeakOrCritical {
+    return _data.status == LeakStatus.critical ||
+        _data.status == LeakStatus.warning ||
+        _data.status == LeakStatus.leakDetected;
+  }
+
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsProvider>();
@@ -471,22 +413,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   MetricCard(
                     label: 'LOSS DELTA',
                     value: _data.delta.toStringAsFixed(2),
-                    unit: 'Limit ${settings.deltaThreshold.toStringAsFixed(1)}',
+                    unit: 'Normal 0-5 · Leak 5-10 · Critical >10',
                     icon: Icons.compare_arrows_rounded,
                     accentColor:
-                        _data.delta > settings.deltaThreshold
+                        _isLeakOrCritical
                             ? AppColors.statusAlert
                             : AppColors.accentPurple,
-                    isHighlighted: _data.delta > settings.deltaThreshold,
+                    isHighlighted: _isLeakOrCritical,
                   ),
                   MetricCard(
                     label: 'DURATION',
-                    value: '${_data.durationMinutes}',
-                    unit: 'Limit ${settings.durationThreshold} min',
+                    value: '$_durationSeconds',
+                    unit: 'seconds',
                     icon: Icons.timer_outlined,
                     accentColor: AppColors.accentOrange,
-                    isHighlighted:
-                        _data.durationMinutes > settings.durationThreshold,
+                    isHighlighted: _isLeakOrCritical,
                   ),
                   MetricCard(
                     label: 'FLOW IN',
@@ -522,12 +463,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     WideMetricCard(
                       label: 'WATER LOST',
                       value: waterLostParts.number,
-                      unit:
-                          '${waterLostParts.unit} total · limit ${settings.formatVolume(settings.waterLostThreshold)}',
+                      unit: '${waterLostParts.unit} total',
                       icon: Icons.water_drop_rounded,
                       accentColor: AppColors.statusAlert,
-                      isHighlighted:
-                          _data.waterLost > settings.waterLostThreshold,
+                      isHighlighted: _isLeakOrCritical,
                     ),
                     const SizedBox(height: 12),
                     WideMetricCard(
@@ -536,7 +475,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       unit: 'Financial impact · ${settings.selectedCurrency}',
                       icon: Icons.attach_money_rounded,
                       accentColor: AppColors.accentOrange,
-                      isHighlighted: _data.moneyLost > 10,
+                      isHighlighted: _data.moneyLost > 0,
                     ),
                     const SizedBox(height: 12),
                     WideMetricCard(
@@ -660,37 +599,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ],
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text(
-              'Quick Actions',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textSecondary,
-                letterSpacing: 1.0,
-              ),
-            ),
-          ),
+
           if (_canGenerateReport)
             ListTile(
               leading:
                   _isGeneratingReport
                       ? const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Icon(Icons.download_rounded),
               title: const Text('Generate Report'),
               onTap:
                   _isGeneratingReport
                       ? null
                       : () {
-                        Navigator.pop(context);
-                        _generateReport();
-                      },
+                          Navigator.pop(context);
+                          _generateReport();
+                        },
             ),
+
           if (_canViewAlerts)
             ListTile(
               leading: Icon(
@@ -704,56 +633,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 _toggleAlertSilence();
               },
             ),
-          if (_canCallTechnician)
-            ListTile(
-              leading:
-                  _isCallingTechnician
-                      ? const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                      : const Icon(Icons.phone_rounded),
-              title: const Text('Call Technician'),
-              onTap:
-                  _isCallingTechnician
-                      ? null
-                      : () {
-                        Navigator.pop(context);
-                        _callMaintenance();
-                      },
-            ),
+
           if (_canViewHistory)
             ListTile(
               leading: const Icon(Icons.bar_chart_rounded),
               title: const Text('View History'),
               onTap: () => _navigateFromDrawer('/history'),
             ),
+
           if (_isAdmin)
             ListTile(
               leading: const Icon(Icons.admin_panel_settings_rounded),
               title: const Text('Admin Panel'),
               onTap: () => _navigateFromDrawer('/admin'),
             ),
-          if (_isAdmin || _isTechnician)
-            ListTile(
-              leading: const Icon(Icons.build_rounded),
-              title: const Text('Maintenance Requests'),
-              onTap: () => _navigateFromDrawer('/admin/maintenance'),
-            ),
+
+
+
           if (_isAdmin)
             ListTile(
               leading: const Icon(Icons.question_answer_rounded),
               title: const Text('Alert Responses'),
               onTap: () => _navigateFromDrawer('/admin/responses'),
             ),
+
           const Divider(),
+
           if (_canAccessSettings)
             ListTile(
               leading: const Icon(Icons.settings),
               title: const Text('Settings'),
               onTap: () => _navigateFromDrawer('/settings'),
             ),
+
           ListTile(
             leading: const Icon(Icons.help_outline),
             title: const Text('Help & Support'),

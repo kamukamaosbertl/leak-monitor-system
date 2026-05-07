@@ -1,22 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../theme/app_theme.dart';
 
-class AdminHomeScreen extends StatefulWidget {
+class AdminHomeScreen extends StatelessWidget {
   const AdminHomeScreen({super.key});
 
-  @override
-  State<AdminHomeScreen> createState() => _AdminHomeScreenState();
-}
-
-class _AdminHomeScreenState extends State<AdminHomeScreen> {
-  bool _isCheckingRole = true;
-  String _userRole = 'worker';
-
-  bool get _isAdmin => _userRole == 'admin';
-
-  final List<_AdminItem> _items = const [
+  static const List<_AdminItem> _items = [
     _AdminItem(
       title: 'Alert Responses',
       subtitle: 'See who acknowledged, responded, or resolved alerts',
@@ -31,7 +20,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     ),
     _AdminItem(
       title: 'Manage Users',
-      subtitle: 'Manage admins, workers, technicians, and viewers',
+      subtitle: 'Manage admins and technicians',
       icon: Icons.people_alt_rounded,
       route: '/admin/users',
     ),
@@ -49,50 +38,28 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     ),
   ];
 
-  @override
-  void initState() {
-    super.initState();
-    _checkRole();
-  }
+  void _goBack(BuildContext context) {
+    final navigator = Navigator.of(context);
 
-  Future<void> _checkRole() async {
-    final prefs = await SharedPreferences.getInstance();
-    final role = prefs.getString('role') ?? 'worker';
-
-    if (!mounted) return;
-
-    if (role != 'admin') {
-      Navigator.pushReplacementNamed(context, '/dashboard');
-      return;
+    if (navigator.canPop()) {
+      navigator.pop();
+    } else {
+      navigator.pushReplacementNamed('/dashboard');
     }
-
-    setState(() {
-      _userRole = role;
-      _isCheckingRole = false;
-    });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isCheckingRole) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
-    if (!_isAdmin) {
-      return const SizedBox.shrink();
-    }
-
     return Scaffold(
       backgroundColor: const Color(0xFFF4F7FB),
       appBar: AppBar(
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         title: const Text('Admin Panel'),
+        automaticallyImplyLeading: false,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_rounded),
-          onPressed: () {
-            Navigator.of(context).pushReplacementNamed('/dashboard');
-          },
+          onPressed: () => _goBack(context),
         ),
       ),
       body: ListView(
@@ -222,9 +189,7 @@ class _AdminTile extends StatelessWidget {
           Icons.chevron_right_rounded,
           color: AppColors.textSecondary,
         ),
-        onTap: () {
-          Navigator.pushNamed(context, item.route);
-        },
+        onTap: () => Navigator.pushNamed(context, item.route),
       ),
     );
   }
