@@ -413,7 +413,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   MetricCard(
                     label: 'LOSS DELTA',
                     value: _data.delta.toStringAsFixed(2),
-                    unit: 'Normal 0-5 · Leak 5-10 · Critical >10',
+                    unit: '',
                     icon: Icons.compare_arrows_rounded,
                     accentColor:
                         _isLeakOrCritical

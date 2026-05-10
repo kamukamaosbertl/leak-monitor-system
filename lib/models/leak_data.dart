@@ -11,7 +11,7 @@ class LeakData {
   final double flowIn;
   final double flowOut;
   final double delta;
-  final int durationMinutes;
+  final double durationMinutes;
   final double waterLost;
   final double moneyLost;
   final String location;
@@ -46,7 +46,7 @@ class LeakData {
       flowIn: flowIn,
       flowOut: flowOut,
       delta: delta,
-      durationMinutes: (json['duration_minutes'] as num?)?.toInt() ?? 0,
+      durationMinutes: (json['duration_minutes'] as num?)?.toDouble() ?? 0.0,
       waterLost: (json['water_lost'] as num?)?.toDouble() ?? 0.0,
       moneyLost: (json['money_lost'] as num?)?.toDouble() ?? 0.0,
       location: json['location'] as String? ?? 'Unknown',
@@ -84,7 +84,7 @@ final LeakData mockLeakData = LeakData(
   flowIn: 0.0,
   flowOut: 0.0,
   delta: 0.0,
-  durationMinutes: 0,
+  durationMinutes: 0.0,
   waterLost: 0.0,
   moneyLost: 0.0,
   location: 'Waiting for sensor...',
